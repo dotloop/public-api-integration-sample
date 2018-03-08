@@ -1,11 +1,574 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/thymeleaf-extras-springsecurity3">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/thymeleaf-extras-springsecurity3" lang="en">
 <head>
     <title>Public API Integration Sample App</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="_csrf" th:content="${_csrf.token}"/>
+    <meta name="_csrf_header" th:content="${_csrf.headerName}"/>
+
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous" />
+    <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
+
+    <script th:inline="javascript">
+        /*<![CDATA[*/
+        var state = {
+            connected: /*[[${connected == null} ? null : ${connected}]]*/,
+            JSONprofiles: /*[[${profiles == null} ? null : ${profiles}]]*/,
+            profiles: [],
+            step: 'connect',
+            participants: [],
+            $participants: [],
+            $loopForm: null
+        };
+
+        var steps = ['connect', 'select-profile', 'select-loop-template', 'loop-it'];
+
+        var token = $("meta[name='_csrf']").attr("content");
+        var header = $("meta[name='_csrf_header']").attr("content");
+        var headers = {};
+        headers[header] = token;
+
+        function popupwindow(url, title, w, h) {
+            var left = (screen.width/2)-(w/2);
+            var top = (screen.height/2)-(h/2);
+            return window.open(url, title, 'toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, copyhistory=no, width='+w+', height='+h+', top='+top+', left='+left);
+        }
+
+        function isEmail(email) {
+            var regex = /^([a-zA-Z0-9_.+-])+\@(([a-zA-Z0-9-])+\.)+([a-zA-Z0-9]{2,4})+$/;
+            return regex.test(email);
+        }
+
+        $(document).ready(function () {
+            initializeView();
+
+        });
+
+        var setState = function() {
+            if (!state.connected) {
+                state.step = 'connect';
+            }
+
+            if (state.connected) {
+
+                state.step = 'loop-it';
+
+                if (state.JSONprofiles) {
+                    state.profiles = JSON.parse(state.JSONprofiles).data;
+                }
+
+                if (!state.selectedLoopTemplate) {
+                    state.step = 'select-loop-template';
+                }
+
+                if (!state.selectedProfile) {
+                    state.step = 'select-profile';
+                }
+
+                if (state.step === 'loop-it') {
+                    if (!state.participants.length) {
+                        state.participants.push({});
+                    }
+                }
+
+            }
+        };
+
+        var initializeView = function() {
+            setState();
+
+            render();
+
+            initListeners();
+        };
+
+        var render = function() {
+            var step = state.step;
+            var nodes = [];
+
+            var $body = $('#card-body-content');
+            var $title = $('<h5 class="card-title" />');
+            var $description = $('<p class="card-text" />');
+            var $action = $('<button class="btn btn-primary" />');
+
+            $body.empty();
+
+            nodes.push(renderStepper());
+
+            if (step === 'connect') {
+                $title.text("Connect to dotloop");
+                $description.text("You will first need to authenticate with dotloop, and add this app to your account.");
+                $action.attr("id", "connect").text("Connect");
+
+                nodes.push($title, $description, $action);
+            }
+
+            if (step === 'select-profile') {
+                $title.text("Select a profile");
+                $description.text("dotloop needs to know which profile to do work in.");
+
+                nodes.push($title, $description, renderButtonList('profiles'));
+            }
+
+            if (step === 'select-loop-template') {
+                $title.text("Select a loop template");
+                nodes.push($title);
+
+                if (state.loopTemplates.length) {
+                    $description.text("dotloop needs to know which loop template to create this loop with.");
+                    nodes.push($description, renderButtonList('loopTemplates'));
+                } else {
+                    $description.text("This profile has no loop templates, so we will just continue.");
+                    $action.addClass("loop-template-button").attr("value", "none").text("Continue");
+                    nodes.push($description, $action);
+                }
+            }
+
+            if (step === 'loop-it') {
+                var $loopIt = $('<img src="/static/loop-it-tm.png" class="btn loop-it-button" style="height: 50%;">');
+                $title.text("Loop-It™");
+                $description.text("Now we can create a loop in the dotloop profile.");
+
+
+                nodes.push($title, $description, renderLoopItForm(), renderParticipantSection(), $loopIt);
+            }
+
+            for (var i = 0; i < nodes.length; i++) {
+                $body.append(nodes[i]);
+            }
+
+            if (step === 'loop-it' && !state.$participants.length) {
+                addParticipant()
+            }
+
+            renderDetails();
+
+        };
+
+        var addParticipant = function() {
+            var $participant = $('#participant').clone().removeAttr('id').show();
+
+            state.$participants.push($participant);
+
+            renderParticipants();
+        };
+
+        var initListeners = function() {
+
+            $("#connect").click(function () {
+                var win = popupwindow(/*[[${authorize_url}]]*/, "Connect with Dotloop!", 800, 600);
+                checkConnect = setInterval(function() {
+                    if (!win || !win.closed) return;
+                    clearInterval(checkConnect);
+                    window.location.reload();
+                }, 100);
+            });
+
+            $(".profile-button").click(function (e) {
+                var profileId = e.target.value;
+
+                state.selectedProfile = profileId;
+
+                $.ajax({
+                    url: "/loop-template?profile_id=" + profileId,
+                    method: "GET",
+                    headers: headers,
+                    success: function (data) {
+                        state.JSONloopTemplates = data;
+                        state.loopTemplates = JSON.parse(data).data;
+
+                        initializeView();
+                    },
+                    error: function (xhr, textStatus, errorThrown) {
+                        switch (xhr.statusCode) {
+                            case 403:
+                                location.reload(); // refresh page to connect
+                            default:
+                                alert('error getting profiles.');
+                        }
+                    }
+
+                });
+            });
+
+            $(".loop-template-button").click(function (e) {
+                var loopTemplateId = e.target.value;
+
+                state.selectedLoopTemplate = loopTemplateId;
+
+                initializeView();
+            });
+
+            $("#add-participant").click(function () {
+                addParticipant();
+            });
+
+            $(".loop-it-button").click(function () {
+                var $loopForm = state.$loopForm;
+                var data = {
+                    name: $('#loopName', $loopForm).val(),
+                    transactionType: $('#transactionType', $loopForm).val(),
+                    status: $('#status', $loopForm).val(),
+                    streetName: $('#streetName', $loopForm).val(),
+                    streetNumber: $('#streetNumber', $loopForm).val(),
+                    unit: $('#unit', $loopForm).val(),
+                    city: $('#city', $loopForm).val(),
+                    zipCode: $('#zipCode', $loopForm).val(),
+                    state: $('#state', $loopForm).val(),
+                    country: $('#country', $loopForm).val(),
+                    participants: []
+                };
+
+                for (var i = 0; i < state.$participants.length; i++) {
+                    var $participant = state.$participants[i];
+                    var participantData = {
+                        fullName: $('#participant-fullName', $participant).val().trim(),
+                        email: $('#participant-email', $participant).val().trim(),
+                        role: $('#participant-role', $participant).val().trim()
+                    };
+                    var valid = false;
+
+                    if (participantData.fullName) {
+                        valid = true;
+                    }
+
+                    if (valid && participantData.email) {
+
+                        if (isEmail(participantData.email)) {
+                            valid = true;
+                        } else {
+                            valid = false;
+                        }
+                    }
+
+                    if (valid) {
+                        data.participants.push(participantData)
+                    } else {
+                        $participant.remove();
+                    }
+                }
+
+                $.ajax({
+                    url: "/loopit?profile_id=" + state.selectedProfile,
+                    method: "POST",
+                    headers: headers,
+                    contentType: 'application/json',
+                    data: JSON.stringify(data),
+                    success: function (data) {
+                        var r = confirm("View Loop on Dotloop?");
+                        if (r == true) {
+                            var loopUrl = JSON.parse(data).data.loopUrl;
+                            // TODO url should come from API
+                            window.open(loopUrl); // popup blocker?!
+                        }
+                    },
+                    error: function (xhr, textStatus, errorThrown) {
+                        switch (xhr.statusCode) {
+                            case 403:
+                                location.reload(); // refresh page to connect
+                            default:
+                                alert('error creating a loop.');
+                        }
+                    }
+
+                });
+            });
+
+        };
+
+        var renderButtonList = function(stateProp) {
+            var list = state[stateProp];
+            var $buttonList = $('<div class="list-group" />');
+            var isProfiles = stateProp === 'profiles';
+            var isLoopTemplates = stateProp === 'loopTemplates';
+
+            if (isLoopTemplates) {
+                $buttonList
+                    .append($('<button type="button" class="list-group-item list-group-item-action loop-template-button"/>')
+                    .attr("value", 'none')
+                    .text('none'))
+            }
+
+            for (var i = 0; i < list.length; i++) {
+                var item = list[i];
+                var name = item.name;
+                var id = item.id;
+                var buttonClass = isProfiles ? 'profile-button' : 'loop-template-button';
+                var $button = $('<button type="button" class="list-group-item list-group-item-action"/>').attr("value", id).text(name);
+                $button.addClass(buttonClass);
+
+                $buttonList.append($button);
+            }
+
+            return $buttonList;
+        };
+
+        var renderStepper = function() {
+            var $nav = $('<nav class="nav nav-pills nav-fill pb-3 mb-3 border-bottom">');
+
+            for (var i = 0; i < steps.length; i++) {
+                var step = steps[i];
+                var stepText = (step === 'loop-it') ? 'Loop-It™' : step;
+                var $item = $('<span class="nav-item nav-link text-muted border-primary rounded-0" />').text(stepText);
+                var $arrow = $('<span class="nav-item nav-link text-muted" />').text('>');
+
+                if (state.step === step) {
+                    $item.addClass('border-bottom text-primary');
+                    $item.removeClass('text-muted');
+                }
+
+                $nav.append($item);
+
+                if (i < steps.length - 1) {
+                    $nav.append($arrow);
+                }
+            }
+
+            return $nav;
+        };
+
+        var renderDetails = function() {
+            var $detailsBody = $('.absolute-header-card');
+            var $detailsP = $('<p />').text('Details: ');
+            var fields = ['Profile', 'Loop Template'];
+
+            function showDetails() {
+                if (state.selectedProfile || state.selectedLoopTemplate) {
+                    return true;
+                }
+                return false;
+            }
+
+            if (showDetails()) {
+                $detailsBody.removeClass('invisible');
+                $detailsBody.empty();
+                $detailsBody.append($detailsP);
+
+                for (var i = 0; i < fields.length; i++) {
+                    var field = fields[i];
+                    var $p = $('<p class="small mb-0" />').text(field + ': ');
+                    var $span = $('<span class="text-primary" />');
+
+                    if (field === 'Profile') {
+                        $span.text(state.selectedProfile || '');
+                    }
+
+                    if (field === 'Loop Template') {
+                        $span.text(state.selectedLoopTemplate || '');
+                    }
+
+                    $p.append($span);
+                    $detailsBody.append($p);
+                }
+            } else {
+                $detailsBody.addClass('invisible');
+            }
+        };
+
+        var renderLoopItForm = function() {
+            state.$loopForm = $('#loopInfo').clone();
+            var $loopName = $('#loopName', state.$loopForm);
+
+            $loopName.val('Loop It Demo - ' + Date.now());
+            state.$loopForm.show();
+
+            return state.$loopForm;
+        };
+
+        var renderParticipantSection = function() {
+            var $loopParticipants = $('#loopParticipants').clone();
+            var $participantsRow = $('#participants-row', $loopParticipants);
+            $participantsRow.addClass('cloned');
+
+            $loopParticipants.show();
+
+            return $loopParticipants;
+        };
+
+        var renderParticipants = function() {
+            var $participants = state.$participants;
+            var $row = $('#participants-row.cloned');
+
+            $row.empty();
+
+            for (var i = 0; i < $participants.length; i++) {
+                var $participant = $participants[i];
+
+                $row.append($participant);
+            }
+        };
+
+        /*]]>*/
+    </script>
 </head>
 <body>
-<h1>Welcome!</h1>
 
-<p>Click <a th:href="@{/hello}">here</a> to see login and see the 'LoopIt' Button in action.</p>
+<style>
+    .container {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        min-height: 100vh;
+    }
+
+    .card-header {
+        background-image: url("/static/hero.png");
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .absolute-header-card {
+        position: absolute;
+        left: 1rem;
+        top: 1rem;
+        background: rgba(255,255,255,0.8);
+        width: 25%;
+        padding: 1rem;
+    }
+</style>
+
+<div class="container" style="display: flex;">
+    <div class="card" style="width: 100%; margin-top: 6rem; margin-bottom: 6rem;">
+        <div class="card-header card-img-top">
+            <div class="card absolute-header-card invisible">
+                <div class="card-body">
+                </div>
+            </div>
+            <img src="/static/logo.png" />
+        </div>
+
+        <div class="card-body" id="card-body-content">
+
+
+        </div>
+    </div>
+</div>
+
+<div id="loopInfo" style="display: none;">
+    <h2>Loop Details</h2>
+    <form>
+        <div class="form-row">
+            <div class="form-group col-md-6 mb-3">
+                <label for="loopName">Loop Name</label>
+                <input type="text" class="form-control" id="loopName" placeholder="Loop Name" value="Loop It Demo - ' + Date.now() + '" />
+            </div>
+
+            <div class="form-group col-md-3 mb-3">
+                <label for="transactionType">Transaction Type</label>
+                <select class="form-control" id="transactionType">
+                    <option value="PURCHASE_OFFER" selected="selected">Purchase Offer</option>
+                </select>
+            </div>
+
+            <div class="form-group col-md-3 mb-3">
+                <label for="status">Status</label>
+                <select class="form-control" id="status">
+                    <option value="PRE_OFFER" selected="selected">Pre Offer</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group col-md-6 mb-3">
+                <label for="streetName">Street</label>
+                <input type="text" class="form-control" id="streetName" value="Waterview Dr" />
+            </div>
+
+            <div class="form-group col-md-3 mb-3">
+                <label for="streetNumber">Street Number</label>
+                <input type="text" class="form-control" id="streetNumber" value="2100" />
+            </div>
+
+            <div class="form-group col-md-3 mb-3">
+                <label for="unit">Unit</label>
+                <input type="text" class="form-control" id="unit" value="20" />
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group col-md-6 mb-3">
+                <label for="city">City</label>
+                <input type="text" class="form-control" id="city" value="San Francisco" />
+            </div>
+
+            <div class="form-group col-md-1 mb-3">
+                <label for="state">State</label>
+                <select class="form-control" id="state">
+                    <option value="CA" selected="selected">CA</option>
+                </select>
+            </div>
+
+            <div class="form-group col-md-1 mb-3">
+                <label for="country">Country</label>
+                <select class="form-control" id="country">
+                    <option value="US" selected="selected">US</option>
+                </select>
+            </div>
+
+            <div class="form-group col-md-4 mb-3">
+                <label for="zipCode">Zip</label>
+                <input type="text" class="form-control" id="zipCode" value="94114" />
+            </div>
+        </div>
+    </form>
+
+</div>
+
+<div id="loopParticipants" style="display: none; margin-top: 2rem;">
+    <div style="display: flex;">
+        <h2>Loop Participants</h2>
+        <button class="btn btn-primary" id="add-participant" style="margin-left: auto;">Add Participant</button>
+    </div>
+
+    <div class="row p-3 justify-content-start" id="participants-row" />
+</div>
+
+<div id="participant" class="col-12 col-md-4 mb-4 participant" style="display: none;">
+    <div class="card" style="width: 100%;">
+        <div class="card-img-top" style="display: flex; justify-content: center;">
+            <div style="height: 180px; width: 160px;">
+                <canvas class="css-47amww" width="1" height="1"></canvas>
+                <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+                    <g fill="none" fill-rule="evenodd">
+                        <path d="M0 0h32v32H0z"></path>
+                        <g stroke="#6C6C76" transform="translate(4 2)">
+                            <circle cx="12" cy="8" r="6.914" stroke-width="2.171"></circle>
+                            <path stroke-width="2" d="M21.995 27c.553 0 1.005-.45 1.005-.99v-3.612C23 18.401 18.138 15 12 15c-6.127 0-11 3.408-11 7.398v3.611c0 .546.448.991 1.005.991h19.99z"></path>
+                        </g>
+                    </g>
+                </svg>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="form-row">
+                <div class="form-group col-12 mb-3">
+                    <label for="participant-fullName">Full Name</label>
+                    <input type="text" class="form-control" id="participant-fullName" placeholder="Full Name" />
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group col-12 mb-3">
+                    <label for="participant-email">Email</label>
+                    <input type="text" class="form-control" id="participant-email" placeholder="Email Address" />
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group col-12 mb-3">
+                    <label for="participant-role">Role</label>
+                    <select class="form-control" id="participant-role">
+                        <option value="BUYER" selected="selected">Buyer</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>

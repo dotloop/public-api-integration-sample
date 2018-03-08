@@ -20,12 +20,7 @@ public class WebSecurityConfig extends WebSecurityConfigurerAdapter {
         http.csrf()
                 .csrfTokenRepository(csrfTokenRepository())
                 .and()
-                .authorizeRequests().antMatchers("/", "/home").permitAll().anyRequest().authenticated()
-                .and()
-                .formLogin().loginPage("/login").permitAll()
-                .and()
-                .logout().permitAll();
-
+                .authorizeRequests().antMatchers("/**").permitAll().anyRequest().authenticated();
     }
 
     @Autowired

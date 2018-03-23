@@ -1,10 +1,7 @@
 package com.dotloop.loopit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.util.JSONPObject;
 import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.Consts;
 import org.apache.http.HttpResponse;
@@ -30,7 +27,6 @@ import org.springframework.web.bind.annotation.*;
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.util.Date;
 
 @Controller
 public class LoopItController {
@@ -57,6 +53,53 @@ public class LoopItController {
 
     private String username = "api user";
 
+    private Request attachHeaders(Request request) {
+        Token token = TokenStore.get(username);
+        request.addHeader("Authorization", "Bearer " + token.getAccessToken())
+                .addHeader("Content-type", "application/json");
+
+        return request;
+    }
+
+    private Request attachBody(Request request,  String bodyData) {
+        request.bodyString(bodyData, ContentType.APPLICATION_JSON);
+
+        return request;
+    }
+
+    private String makeRequest(String type, String params, String bodyData) throws Exception {
+        try {
+            params = params.isEmpty() ? "" : params;
+
+            Request request = attachHeaders(Request.Get(getApiBaseUrl() + params));
+
+            if (type.equalsIgnoreCase("post")) {
+                request = attachBody(attachHeaders(Request.Post(getApiBaseUrl() + params)), bodyData);
+            }
+
+            HttpResponse response = request.execute().returnResponse();
+
+            String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
+            logger.debug("Response: " + payload);
+            if (response.getStatusLine().getStatusCode() >= 300) {
+                throw new HttpResponseException(response.getStatusLine().getStatusCode(),
+                        response.getStatusLine().getReasonPhrase());
+            }
+
+            return payload;
+
+        } catch (Exception e) {
+            logger.error("Something unexpected happened: " + e.getMessage());
+            TokenStore.delete(username); // fixme - needed only for 401
+            throw new RuntimeException(e); // todo handle error - token revoked, etc
+        }
+
+    }
+
+    private String makeRequest(String type, String params) throws Exception {
+        return makeRequest(type, params, "");
+    }
+
     @RequestMapping(value = "/loopit", method = RequestMethod.POST)
     @ResponseBody
     public String loopIt(
@@ -73,33 +116,13 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            try {
-                HttpResponse response = Request.Post(getApiBaseUrl() + "/loop-it?profile_id=" + profile_id)
-                        .addHeader("Authorization", "Bearer " + token.getAccessToken())
-                        .addHeader("Content-type", "application/json")
-                        .addHeader("Accept", "*/*") // fixme - this shouldn't be needed
-                        .bodyString(data, ContentType.APPLICATION_JSON)
-                        .execute().returnResponse();
-
-                String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
-                logger.debug("Response: " + payload);
-                if (response.getStatusLine().getStatusCode() >= 300) {
-                    throw new HttpResponseException(response.getStatusLine().getStatusCode(),
-                            response.getStatusLine().getReasonPhrase());
-                }
-                return payload;
-            } catch (Exception e) {
-                logger.error("Something unexpected happened: " + e.getMessage());
-                TokenStore.delete(username); // fixme - needed only for 401
-                throw new RuntimeException(e); // todo handle error - token revoked, etc
-            }
+            return makeRequest("post", "/loop-it?profile_id=" + profile_id, data);
         }
     }
 
     @RequestMapping(value = "/loop-template", method = RequestMethod.GET)
     @ResponseBody
-    public String getLoopTemplates(@RequestParam(value = "profile_id", required = true) String profile_id) {
-
+    public String getLoopTemplates(@RequestParam(value = "profile_id", required = true) String profile_id) throws Exception {
         Token token = TokenStore.get(username);
 
         if (token == null) {
@@ -107,35 +130,13 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            try {
-                HttpResponse response = Request.Get(getApiBaseUrl() + "/profile/" + profile_id + "/loop-template")
-                        .addHeader("Authorization", "Bearer " + token.getAccessToken())
-                        .addHeader("Content-type", "application/json")
-                        .addHeader("Accept", "*/*") // fixme - this shouldn't be needed
-                        .execute().returnResponse();
-
-                String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
-                logger.debug("Response: " + payload);
-                if (response.getStatusLine().getStatusCode() >= 300) {
-                    throw new HttpResponseException(response.getStatusLine().getStatusCode(),
-                            response.getStatusLine().getReasonPhrase());
-                }
-                return payload;
-            } catch (Exception e) {
-                logger.error("Something unexpected happened: " + e.getMessage());
-                TokenStore.delete(username); // fixme - needed only for 401
-                throw new RuntimeException(e); // todo handle error - token revoked, etc
-            }
+            return makeRequest("get", "/profile/" + profile_id + "/loop-template");
         }
     }
 
     @RequestMapping("/")
-    public String home(HttpServletRequest request, Model model) {
-//        User user = getUser();
-
+    public String home(HttpServletRequest request, Model model) throws Exception {
         boolean connected = !StringUtils.isEmpty(TokenStore.get(username));
-
-
 
         model.addAttribute("connected", connected);
         model.addAttribute("authorize_url", getAuthorizeUrl());
@@ -157,13 +158,6 @@ public class LoopItController {
 
     @RequestMapping("/auth/callback")
     public String callback(HttpServletRequest request, @RequestParam String code) {
-
-        // XSRF protection
-//        String csrfToken = csrfTokenRepository.loadToken(request).getToken();
-//        if (!state.equals(csrfToken)) {
-//            throw new ForbiddenException("csrf failure.");
-//        }
-
         // HTTP Basic Auth
         String authStr = Base64Utils.encodeToString((clientId + ":" + clientSecret).getBytes(Consts.UTF_8));
         try {
@@ -175,7 +169,7 @@ public class LoopItController {
         return "callback";
     }
 
-    private String getProfiles() {
+    private String getProfiles() throws Exception {
         Token token = TokenStore.get(username);
 
         if (token == null) {
@@ -183,26 +177,7 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            try {
-                HttpResponse response = Request.Get(getApiBaseUrl() + "/profile")
-                        .addHeader("Authorization", "Bearer " + token.getAccessToken())
-                        .addHeader("Content-type", "application/json")
-                        .addHeader("Accept", "*/*") // fixme - this shouldn't be needed
-                        .execute().returnResponse();
-
-                String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
-                logger.debug("Response: " + payload);
-                if (response.getStatusLine().getStatusCode() >= 300) {
-                    throw new HttpResponseException(response.getStatusLine().getStatusCode(),
-                            response.getStatusLine().getReasonPhrase());
-                }
-
-                return payload;
-            } catch (Exception e) {
-                logger.error("Something unexpected happened: " + e.getMessage());
-                TokenStore.delete(username); // fixme - needed only for 401
-                throw new RuntimeException(e); // todo handle error - token revoked, etc
-            }
+            return makeRequest("get", "/profile");
         }
     }
 

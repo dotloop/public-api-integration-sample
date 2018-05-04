@@ -51,12 +51,12 @@ public class LoopItController {
     @Value("${dotloop.api.endpoint}")
     private String apiEndpoint;
 
-    private String username = "api user";
+    private String USERNAME = "api user";
 
     private Request attachHeaders(Request request) {
-        Token token = TokenStore.get(username);
+        Token token = TokenStore.get(USERNAME);
         request.addHeader("Authorization", "Bearer " + token.getAccessToken())
-                .addHeader("Content-type", "application/json");
+                .addHeader("Content-type", ContentType.APPLICATION_JSON.toString());
 
         return request;
     }
@@ -90,7 +90,7 @@ public class LoopItController {
 
         } catch (Exception e) {
             logger.error("Something unexpected happened: " + e.getMessage());
-            TokenStore.delete(username); // fixme - needed only for 401
+            TokenStore.delete(USERNAME); // fixme - needed only for 401
             throw new RuntimeException(e); // todo handle error - token revoked, etc
         }
 
@@ -106,7 +106,7 @@ public class LoopItController {
             @RequestParam(value = "profile_id", required = true) String profile_id,
             @RequestBody Loop loop) throws Exception {
 
-        Token token = TokenStore.get(username);
+        Token token = TokenStore.get(USERNAME);
 
         ObjectMapper mapper = new ObjectMapper();
         String data = mapper.writeValueAsString(loop);
@@ -123,7 +123,7 @@ public class LoopItController {
     @RequestMapping(value = "/loop-template", method = RequestMethod.GET)
     @ResponseBody
     public String getLoopTemplates(@RequestParam(value = "profile_id", required = true) String profile_id) throws Exception {
-        Token token = TokenStore.get(username);
+        Token token = TokenStore.get(USERNAME);
 
         if (token == null) {
             throw new AccessNotGrantedException();
@@ -136,14 +136,16 @@ public class LoopItController {
 
     @RequestMapping("/")
     public String home(HttpServletRequest request, Model model) throws Exception {
-        boolean connected = !StringUtils.isEmpty(TokenStore.get(username));
+        boolean connected = !StringUtils.isEmpty(TokenStore.get(USERNAME));
 
         model.addAttribute("connected", connected);
         model.addAttribute("authorize_url", getAuthorizeUrl());
-        model.addAttribute("username", StringUtils.isEmpty(TokenStore.get(username)));
+        model.addAttribute("username", StringUtils.isEmpty(TokenStore.get(USERNAME)));
 
         if (connected) {
             model.addAttribute("profiles", getProfiles());
+            String folders = getFolders();
+            System.out.println("");
         }
 
         return "home";
@@ -162,7 +164,7 @@ public class LoopItController {
         String authStr = Base64Utils.encodeToString((clientId + ":" + clientSecret).getBytes(Consts.UTF_8));
         try {
             Token token = getToken(code, authStr);
-            TokenStore.save(username, token);
+            TokenStore.save(USERNAME, token);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -170,7 +172,7 @@ public class LoopItController {
     }
 
     private String getProfiles() throws Exception {
-        Token token = TokenStore.get(username);
+        Token token = TokenStore.get(USERNAME);
 
         if (token == null) {
             throw new AccessNotGrantedException();
@@ -178,6 +180,18 @@ public class LoopItController {
             logger.debug("Retrieved token : {}", token);
 
             return makeRequest("get", "/profile");
+        }
+    }
+
+    private String getFolders() throws Exception {
+        Token token = TokenStore.get(USERNAME);
+
+        if (token == null) {
+            throw new AccessNotGrantedException();
+        } else {
+            logger.debug("Retrieved token : {}", token);
+
+            return makeRequest("get", "/profile/4885868/loop/79983228/folder?include_documents=true");
         }
     }
 

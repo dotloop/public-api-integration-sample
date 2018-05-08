@@ -129,7 +129,7 @@ public class LoopItController {
         boolean connected = !StringUtils.isEmpty(TokenStore.get(USERNAME));
 
         model.addAttribute("connected", connected);
-        model.addAttribute("authorize_url", getAuthorizeUrl());
+        model.addAttribute("authorize_url", getAuthorizeUrl(csrfTokenRepository.loadToken(request).getToken()));
         model.addAttribute("username", StringUtils.isEmpty(TokenStore.get(USERNAME)));
 
         if (connected) {
@@ -179,12 +179,13 @@ public class LoopItController {
         }
     }
 
-    private String getAuthorizeUrl() {
+    private String getAuthorizeUrl(String state) {
         try {
             return new URIBuilder(oauthEndpoint + "/authorize")
                     .addParameter("response_type", "code")
                     .addParameter("client_id", clientId)
-                    .addParameter("redirect_uri", redirectUrl).toString();
+                    .addParameter("redirect_uri", redirectUrl)
+                    .addParameter("state", state).toString();
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
         }

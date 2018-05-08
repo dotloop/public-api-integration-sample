@@ -1,21 +1,20 @@
 package com.dotloop.loopit;
 
+import org.springframework.stereotype.Service;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Service
 public class TokenStore {
 
-    private final static Map<String, Token> tokens = new ConcurrentHashMap<>();
+    private Token token;
 
-    public static Token get(String username) {
-        return tokens.get(username);
+    public Token getToken() {
+        return token;
     }
 
-    public static void delete(String username) {
-        tokens.remove(username);
-    }
-
-    public static void save(String username, Token token) {
-        tokens.put(username, token);
+    public void save(Token token) {
+        this.token = token;
     }
 }

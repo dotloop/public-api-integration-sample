@@ -36,6 +36,9 @@ public class LoopItController {
     @Autowired
     CsrfTokenRepository csrfTokenRepository;
 
+    @Autowired
+    TokenStore tokenStore;
+
     @Value("${dotloop.oauth.client.id}")
     private String clientId;
 
@@ -51,8 +54,6 @@ public class LoopItController {
     @Value("${dotloop.api.endpoint}")
     private String apiEndpoint;
 
-    private String USERNAME = "api user";
-
     private String post(String url, String bodyData) {
         Request postRequest = Request.Post(getApiBaseUrl() + url).bodyString(bodyData, ContentType.APPLICATION_JSON);
         return executeRequest(postRequest);
@@ -66,7 +67,7 @@ public class LoopItController {
     private String executeRequest(Request request) {
 
         try {
-            Token token = TokenStore.get(USERNAME);
+            Token token = tokenStore.getToken();
             request.addHeader("Authorization", "Bearer " + token.getAccessToken())
                     .addHeader("Content-type", ContentType.APPLICATION_JSON.toString());
 
@@ -84,7 +85,6 @@ public class LoopItController {
 
         } catch (Exception e) {
             logger.error("Something unexpected happened: " + e.getMessage());
-            TokenStore.delete(USERNAME);
             throw new RuntimeException(e);
         }
 
@@ -96,7 +96,7 @@ public class LoopItController {
             @RequestParam(value = "profile_id", required = true) String profile_id,
             @RequestBody Loop loop) throws Exception {
 
-        Token token = TokenStore.get(USERNAME);
+        Token token = tokenStore.getToken();
 
         ObjectMapper mapper = new ObjectMapper();
         String data = mapper.writeValueAsString(loop);
@@ -113,7 +113,7 @@ public class LoopItController {
     @RequestMapping(value = "/loop-template", method = RequestMethod.GET)
     @ResponseBody
     public String getLoopTemplates(@RequestParam(value = "profile_id", required = true) String profile_id) throws Exception {
-        Token token = TokenStore.get(USERNAME);
+        Token token = tokenStore.getToken();
 
         if (token == null) {
             throw new AccessNotGrantedException();
@@ -126,11 +126,11 @@ public class LoopItController {
 
     @RequestMapping("/")
     public String home(HttpServletRequest request, Model model) throws Exception {
-        boolean connected = !StringUtils.isEmpty(TokenStore.get(USERNAME));
+        boolean connected = !StringUtils.isEmpty(tokenStore.getToken());
 
         model.addAttribute("connected", connected);
         model.addAttribute("authorize_url", getAuthorizeUrl(csrfTokenRepository.loadToken(request).getToken()));
-        model.addAttribute("username", StringUtils.isEmpty(TokenStore.get(USERNAME)));
+        model.addAttribute("username", StringUtils.isEmpty(tokenStore.getToken()));
 
         if (connected) {
             model.addAttribute("profiles", getProfiles());
@@ -140,20 +140,13 @@ public class LoopItController {
         return "home";
     }
 
-    @RequestMapping("/delete")
-    @ResponseBody
-    public void deleteToken() {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        TokenStore.delete(user.getUsername());
-    }
-
     @RequestMapping("/auth/callback")
     public String callback(HttpServletRequest request, @RequestParam String code) {
         // HTTP Basic Auth
         String authStr = Base64Utils.encodeToString((clientId + ":" + clientSecret).getBytes(Consts.UTF_8));
         try {
             Token token = getToken(code, authStr);
-            TokenStore.save(USERNAME, token);
+            tokenStore.save(token);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -161,7 +154,7 @@ public class LoopItController {
     }
 
     private String getProfiles() throws Exception {
-        Token token = TokenStore.get(USERNAME);
+        Token token = tokenStore.getToken();
 
         if (token == null) {
             throw new AccessNotGrantedException();

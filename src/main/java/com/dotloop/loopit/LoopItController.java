@@ -1,5 +1,6 @@
 package com.dotloop.loopit;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.Consts;
@@ -21,15 +22,11 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.util.Base64Utils;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.util.Date;
 
 @Controller
 public class LoopItController {
@@ -38,6 +35,9 @@ public class LoopItController {
 
     @Autowired
     CsrfTokenRepository csrfTokenRepository;
+
+    @Autowired
+    TokenStore tokenStore;
 
     @Value("${dotloop.oauth.client.id}")
     private String clientId;
@@ -54,78 +54,115 @@ public class LoopItController {
     @Value("${dotloop.api.endpoint}")
     private String apiEndpoint;
 
-    @RequestMapping("/loopit")
-    @ResponseBody
-    public String loopIt() {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+    private String post(String url, String bodyData) {
+        Request postRequest = Request.Post(getApiBaseUrl() + url).bodyString(bodyData, ContentType.APPLICATION_JSON);
+        return executeRequest(postRequest);
+    }
 
-        Token token = TokenStore.get(user.getUsername());
+    private String get(String url) {
+        Request getRequest = Request.Get(getApiBaseUrl() + url);
+        return executeRequest(getRequest);
+    }
+
+    private String executeRequest(Request request) {
+
+        try {
+            Token token = tokenStore.getToken();
+            request.addHeader("Authorization", "Bearer " + token.getAccessToken())
+                    .addHeader("Content-type", ContentType.APPLICATION_JSON.toString());
+
+            HttpResponse response = request.execute().returnResponse();
+
+            String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
+            logger.debug("Response: " + payload);
+
+            if (response.getStatusLine().getStatusCode() >= 300) {
+                throw new HttpResponseException(response.getStatusLine().getStatusCode(),
+                        response.getStatusLine().getReasonPhrase());
+            }
+
+            return payload;
+
+        } catch (Exception e) {
+            logger.error("Something unexpected happened: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+
+    }
+
+    @RequestMapping(value = "/loopit", method = RequestMethod.POST)
+    @ResponseBody
+    public String loopIt(
+            @RequestParam(value = "profile_id", required = true) String profile_id,
+            @RequestBody Loop loop) throws Exception {
+
+        Token token = tokenStore.getToken();
+
+        ObjectMapper mapper = new ObjectMapper();
+        String data = mapper.writeValueAsString(loop);
 
         if (token == null) {
             throw new AccessNotGrantedException();
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            try {
-                HttpResponse response = Request.Post(getApiBaseUrl() + "/loop-it")
-                        .addHeader("Authorization", "Bearer " + token.getAccessToken())
-                        .addHeader("Content-type", "application/json")
-                        .addHeader("Accept", "*/*") // fixme - this shouldn't be needed
-                        .bodyString("{\"name\":\"Loop It Demo - " + new Date() + "\",\"transactionType\":\"PURCHASE_OFFER\",\"status\":\"PRE_OFFER\",\"streetName\":\"Waterview Dr\",\"streetNumber\":\"2100\",\"unit\":\"12\",\"city\":\"San Francisco\",\"zipCode\":\"94114\",\"state\":\"CA\",\"country\":\"US\",\"participants\":[{\"fullName\":\"Brian Erwin\",\"email\":\"brianerwin@newkyhome.com\",\"role\":\"BUYER\"},{\"fullName\":\"Allen Agent\",\"email\":\"allen.agent@gmail.com\",\"role\":\"LISTING_AGENT\"},{\"fullName\":\"Sean Seller\",\"email\":\"sean.seller@yahoo.com\",\"role\":\"SELLER\"}]}", ContentType.APPLICATION_JSON)
-                        .execute().returnResponse();
-                String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
-                logger.debug("Response: " + payload);
-                if (response.getStatusLine().getStatusCode() >= 300) {
-                    throw new HttpResponseException(response.getStatusLine().getStatusCode(),
-                            response.getStatusLine().getReasonPhrase());
-                }
-                return payload;
-            } catch (Exception e) {
-                logger.error("Something unexpected happened: " + e.getMessage());
-                TokenStore.delete(user.getUsername()); // fixme - needed only for 401
-                throw new RuntimeException(e); // todo handle error - token revoked, etc
-            }
+            return post("/loop-it?profile_id=" + profile_id, data);
         }
     }
 
-    @RequestMapping("/hello")
-    public String hello(HttpServletRequest request, Model model) {
-        User user = getUser();
+    @RequestMapping(value = "/loop-template", method = RequestMethod.GET)
+    @ResponseBody
+    public String getLoopTemplates(@RequestParam(value = "profile_id", required = true) String profile_id) throws Exception {
+        Token token = tokenStore.getToken();
 
-        boolean connected = !StringUtils.isEmpty(TokenStore.get(user.getUsername()));
+        if (token == null) {
+            throw new AccessNotGrantedException();
+        } else {
+            logger.debug("Retrieved token : {}", token);
+
+            return get("/profile/" + profile_id + "/loop-template");
+        }
+    }
+
+    @RequestMapping("/")
+    public String home(HttpServletRequest request, Model model) throws Exception {
+        boolean connected = !StringUtils.isEmpty(tokenStore.getToken());
 
         model.addAttribute("connected", connected);
         model.addAttribute("authorize_url", getAuthorizeUrl(csrfTokenRepository.loadToken(request).getToken()));
-        model.addAttribute("username", StringUtils.isEmpty(TokenStore.get(user.getUsername())));
+        model.addAttribute("username", StringUtils.isEmpty(tokenStore.getToken()));
 
-        return "hello";
-    }
+        if (connected) {
+            model.addAttribute("profiles", getProfiles());
+            System.out.println("");
+        }
 
-    @RequestMapping("/delete")
-    @ResponseBody
-    public void deleteToken() {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        TokenStore.delete(user.getUsername());
+        return "home";
     }
 
     @RequestMapping("/auth/callback")
-    public String callback(HttpServletRequest request, @RequestParam String code, @RequestParam String state) {
-
-        // XSRF protection
-        String csrfToken = csrfTokenRepository.loadToken(request).getToken();
-        if (!state.equals(csrfToken)) {
-            throw new ForbiddenException("csrf failure.");
-        }
-
+    public String callback(HttpServletRequest request, @RequestParam String code) {
         // HTTP Basic Auth
         String authStr = Base64Utils.encodeToString((clientId + ":" + clientSecret).getBytes(Consts.UTF_8));
         try {
             Token token = getToken(code, authStr);
-            TokenStore.save(getUser().getUsername(), token);
+            tokenStore.save(token);
         } catch (IOException e) {
             e.printStackTrace();
         }
         return "callback";
+    }
+
+    private String getProfiles() throws Exception {
+        Token token = tokenStore.getToken();
+
+        if (token == null) {
+            throw new AccessNotGrantedException();
+        } else {
+            logger.debug("Retrieved token : {}", token);
+
+            return get("/profile");
+        }
     }
 
     @ResponseStatus(HttpStatus.FORBIDDEN)

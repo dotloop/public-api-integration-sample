@@ -53,34 +53,28 @@ public class LoopItController {
 
     private String USERNAME = "api user";
 
-    private Request attachHeaders(Request request) {
-        Token token = TokenStore.get(USERNAME);
-        request.addHeader("Authorization", "Bearer " + token.getAccessToken())
-                .addHeader("Content-type", ContentType.APPLICATION_JSON.toString());
-
-        return request;
+    private String post(String url, String bodyData) {
+        Request postRequest = Request.Post(getApiBaseUrl() + url).bodyString(bodyData, ContentType.APPLICATION_JSON);
+        return executeRequest(postRequest);
     }
 
-    private Request attachBody(Request request,  String bodyData) {
-        request.bodyString(bodyData, ContentType.APPLICATION_JSON);
-
-        return request;
+    private String get(String url) {
+        Request getRequest = Request.Get(getApiBaseUrl() + url);
+        return executeRequest(getRequest);
     }
 
-    private String makeRequest(String type, String params, String bodyData) throws Exception {
+    private String executeRequest(Request request) {
+
         try {
-            params = params.isEmpty() ? "" : params;
-
-            Request request = attachHeaders(Request.Get(getApiBaseUrl() + params));
-
-            if (type.equalsIgnoreCase("post")) {
-                request = attachBody(attachHeaders(Request.Post(getApiBaseUrl() + params)), bodyData);
-            }
+            Token token = TokenStore.get(USERNAME);
+            request.addHeader("Authorization", "Bearer " + token.getAccessToken())
+                    .addHeader("Content-type", ContentType.APPLICATION_JSON.toString());
 
             HttpResponse response = request.execute().returnResponse();
 
             String payload = IOUtils.toString(response.getEntity().getContent(), "UTF-8");
             logger.debug("Response: " + payload);
+
             if (response.getStatusLine().getStatusCode() >= 300) {
                 throw new HttpResponseException(response.getStatusLine().getStatusCode(),
                         response.getStatusLine().getReasonPhrase());
@@ -90,14 +84,10 @@ public class LoopItController {
 
         } catch (Exception e) {
             logger.error("Something unexpected happened: " + e.getMessage());
-            TokenStore.delete(USERNAME); // fixme - needed only for 401
-            throw new RuntimeException(e); // todo handle error - token revoked, etc
+            TokenStore.delete(USERNAME);
+            throw new RuntimeException(e);
         }
 
-    }
-
-    private String makeRequest(String type, String params) throws Exception {
-        return makeRequest(type, params, "");
     }
 
     @RequestMapping(value = "/loopit", method = RequestMethod.POST)
@@ -116,7 +106,7 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            return makeRequest("post", "/loop-it?profile_id=" + profile_id, data);
+            return post("/loop-it?profile_id=" + profile_id, data);
         }
     }
 
@@ -130,7 +120,7 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            return makeRequest("get", "/profile/" + profile_id + "/loop-template");
+            return get("/profile/" + profile_id + "/loop-template");
         }
     }
 
@@ -144,7 +134,6 @@ public class LoopItController {
 
         if (connected) {
             model.addAttribute("profiles", getProfiles());
-            String folders = getFolders();
             System.out.println("");
         }
 
@@ -179,19 +168,7 @@ public class LoopItController {
         } else {
             logger.debug("Retrieved token : {}", token);
 
-            return makeRequest("get", "/profile");
-        }
-    }
-
-    private String getFolders() throws Exception {
-        Token token = TokenStore.get(USERNAME);
-
-        if (token == null) {
-            throw new AccessNotGrantedException();
-        } else {
-            logger.debug("Retrieved token : {}", token);
-
-            return makeRequest("get", "/profile/4885868/loop/79983228/folder?include_documents=true");
+            return get("/profile");
         }
     }
 
